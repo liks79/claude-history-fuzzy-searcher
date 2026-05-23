@@ -1,0 +1,172 @@
+#!/usr/bin/env bash
+# cc-hist — Claude Code chat history fuzzy searcher
+# https://github.com/liks79/claude-history-fuzzy-searcher
+set -euo pipefail
+
+CLAUDE_HOME="${CLAUDE_HOME:-$HOME/.claude}"
+HISTORY_FILE="$CLAUDE_HOME/history.jsonl"
+OUTPUT_FILE=""
+INITIAL_QUERY=""
+
+usage() {
+    cat <<'EOF'
+Usage: cc-hist [-o FILE] [-q QUERY] [-h]
+
+Fuzzy search Claude Code chat history using fzf.
+
+Options:
+  -o, --output FILE   Write selected message to FILE instead of stdout
+  -q, --query QUERY   Start fzf with this initial search query
+  -h, --help          Show this help message
+
+Environment:
+  CLAUDE_HOME         Claude Code data directory (default: ~/.claude)
+
+Keybindings in fzf:
+  Enter               Select and output the chosen message
+  Ctrl+/              Toggle preview pane
+  Esc                 Cancel without selection
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -o|--output)   OUTPUT_FILE="$2"; shift 2;;
+        -q|--query)    INITIAL_QUERY="$2"; shift 2;;
+        -h|--help)     usage; exit 0;;
+        *)             echo "Unknown option: $1" >&2; usage >&2; exit 1;;
+    esac
+done
+
+# Dependency checks
+for cmd in fzf python3; do
+    if ! command -v "$cmd" &>/dev/null; then
+        echo "Error: '$cmd' is not installed." >&2
+        [[ "$cmd" == "fzf" ]] && echo "Install fzf: https://github.com/junegunn/fzf#installation" >&2
+        exit 1
+    fi
+done
+
+if [[ ! -f "$HISTORY_FILE" ]]; then
+    echo "Error: Claude Code history not found: $HISTORY_FILE" >&2
+    echo "Make sure Claude Code has been run at least once." >&2
+    exit 1
+fi
+
+# Working directory (cleaned up on exit)
+WORKDIR=$(mktemp -d)
+trap 'rm -rf "$WORKDIR"' EXIT
+
+ENTRIES_JSON="$WORKDIR/entries.json"
+DISPLAY_TXT="$WORKDIR/display.txt"
+PREVIEW_PY="$WORKDIR/preview.py"
+
+# Parse history into display lines and indexed entries
+python3 - "$HISTORY_FILE" "$ENTRIES_JSON" "$DISPLAY_TXT" <<'PYEOF'
+import json, sys
+from pathlib import Path
+from datetime import datetime
+
+_, history_file, entries_json, display_txt = sys.argv
+
+entries = []
+with open(history_file) as f:
+    for line in f:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+            msg = obj.get('display', '').strip()
+            if not msg or msg.startswith('init') or msg == '/':
+                continue
+            ts = obj.get('timestamp', 0)
+            proj = Path(obj.get('project', '')).name
+            dt = datetime.fromtimestamp(ts / 1000).strftime('%Y-%m-%d %H:%M')
+            entries.append({'ts': ts, 'dt': dt, 'proj': proj, 'msg': msg})
+        except Exception:
+            pass
+
+# Deduplicate (newest wins) and sort newest-first
+seen = set()
+deduped = []
+for e in sorted(entries, key=lambda x: x['ts'], reverse=True):
+    if e['msg'] not in seen:
+        seen.add(e['msg'])
+        deduped.append(e)
+
+with open(entries_json, 'w') as ef, open(display_txt, 'w') as df:
+    for i, e in enumerate(deduped):
+        ef.write(json.dumps(e, ensure_ascii=False) + '\n')
+        preview = e['msg'].replace('\n', ' ↵ ')[:300]
+        proj_part = f"({e['proj']}) " if e['proj'] else ''
+        df.write(f"{i}\t[{e['dt']}] {proj_part}{preview}\n")
+PYEOF
+
+# Preview helper: show full message for a given index
+cat > "$PREVIEW_PY" <<PYEOF
+import json, sys
+idx = int(sys.argv[1])
+entries_json = sys.argv[2]
+with open(entries_json) as f:
+    for i, line in enumerate(f):
+        if i == idx:
+            e = json.loads(line)
+            print(e['msg'])
+            break
+PYEOF
+
+entry_count=$(wc -l < "$DISPLAY_TXT")
+if [[ "$entry_count" -eq 0 ]]; then
+    echo "No history entries found." >&2
+    exit 0
+fi
+
+# Build fzf arguments
+fzf_args=(
+    --delimiter=$'\t'
+    --with-nth=2            # hide index column
+    --no-sort               # already sorted newest-first
+    --reverse
+    --prompt='Claude History > '
+    --header="$entry_count messages  |  Enter:select  Ctrl+/:preview  Esc:cancel"
+    --preview="python3 $PREVIEW_PY {1} $ENTRIES_JSON"
+    --preview-window='down:40%:wrap:border-top:hidden'
+    --bind='ctrl-/:toggle-preview'
+    --color='header:italic,header:dim'
+)
+
+# Popup mode: prefer tmux popup, then Zellij, then inline
+if [[ -n "${TMUX:-}" ]]; then
+    fzf_args+=(--tmux center,80%,60%)
+elif [[ -n "${ZELLIJ_SESSION_NAME:-}" ]]; then
+    fzf_args+=(--popup center,80%,60%)
+else
+    fzf_args+=(--height '~60%' --border rounded)
+fi
+
+[[ -n "$INITIAL_QUERY" ]] && fzf_args+=(--query "$INITIAL_QUERY")
+
+# Run fzf
+SELECTED=$(< "$DISPLAY_TXT" fzf "${fzf_args[@]}") || exit 0
+
+IDX=$(printf '%s' "$SELECTED" | cut -d$'\t' -f1)
+
+MESSAGE=$(python3 - "$IDX" "$ENTRIES_JSON" <<'PYEOF'
+import json, sys
+idx = int(sys.argv[1])
+entries_json = sys.argv[2]
+with open(entries_json) as f:
+    for i, line in enumerate(f):
+        if i == idx:
+            e = json.loads(line)
+            print(e['msg'], end='')
+            break
+PYEOF
+)
+
+if [[ -n "$OUTPUT_FILE" ]]; then
+    printf '%s' "$MESSAGE" > "$OUTPUT_FILE"
+else
+    printf '%s' "$MESSAGE"
+fi

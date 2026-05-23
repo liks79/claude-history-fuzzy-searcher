@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# cc-hist-edit — editor wrapper for Claude Code's chat:externalEditor action
+#
+# Claude Code's `chat:externalEditor` keybinding calls $EDITOR with a temp file.
+# This script intercepts that call to show fzf history search instead.
+# The selected message is written to the temp file, which Claude Code then
+# inserts as the chat draft.
+#
+# Usage (by Claude Code internally): cc-hist-edit <tmpfile>
+set -euo pipefail
+
+TMPFILE="${1:-}"
+
+if [[ -z "$TMPFILE" ]]; then
+    echo "Usage: cc-hist-edit <tmpfile>" >&2
+    echo "This script is meant to be used as \$EDITOR in Claude Code." >&2
+    exit 1
+fi
+
+exec cc-hist --output "$TMPFILE"
