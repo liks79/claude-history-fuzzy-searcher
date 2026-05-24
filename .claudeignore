@@ -1,0 +1,8 @@
+# Exclude Claude's own memory for this project from context
+.claude/
+
+# Large or binary files that aren't useful as context
+*.png
+*.jpg
+*.gif
+*.pdf
