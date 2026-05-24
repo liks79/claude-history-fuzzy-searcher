@@ -116,6 +116,111 @@ Edit `~/.claude/keybindings.json` to change or add shortcuts:
 CLAUDE_HOME=/path/to/.claude cc-hist
 ```
 
+## Advanced usage
+
+### Tmux key binding
+
+You can bind `cc-hist` to a tmux key so it opens as a popup from any terminal window — not just inside Claude Code.
+
+Add to `~/.tmux.conf`:
+
+```tmux
+# Ctrl+H opens Claude Code history search as a tmux popup
+bind-key -n C-h display-popup -E -w 80% -h 60% "cc-hist -o /tmp/cc-hist-tmux.txt && cat /tmp/cc-hist-tmux.txt | pbcopy"
+```
+
+Or, if you want the selection pasted directly into the active pane:
+
+```tmux
+bind-key -n C-h run-shell "cc-hist -o /tmp/cc-hist-tmux.txt && tmux load-buffer /tmp/cc-hist-tmux.txt && tmux paste-buffer"
+```
+
+Reload your config with `tmux source ~/.tmux.conf`.
+
+### Standalone terminal usage
+
+`cc-hist` works as a plain CLI tool — no Claude Code required.
+
+```bash
+# Interactive search, print selected message to stdout
+cc-hist
+
+# Write selected message to a file
+cc-hist -o /tmp/draft.txt
+
+# Pre-fill the search query
+cc-hist -q "deploy"
+
+# Pipe the result into another command
+cc-hist | pbcopy          # macOS — copy to clipboard
+cc-hist | xclip -sel clip # Linux — copy to clipboard
+cc-hist | wl-copy         # Wayland — copy to clipboard
+```
+
+### Using cc-hist without replacing your `$EDITOR`
+
+By default `install.sh` sets `EDITOR=cc-hist-edit` globally in Claude Code's `settings.json`, which means every `chat:externalEditor` action opens history search. If you want to keep your editor (e.g. `nvim`) and trigger history search via a **separate key binding**, do this instead:
+
+**Step 1 — restore your original editor**
+
+In `~/.claude/settings.json`, set `EDITOR` back to your editor and remove `cc-hist-edit`:
+
+```json
+{
+  "env": {
+    "EDITOR": "nvim"
+  }
+}
+```
+
+**Step 2 — add a dedicated history key binding**
+
+Create a small wrapper script, e.g. `~/.local/bin/cc-hist-paste`:
+
+```bash
+#!/usr/bin/env bash
+# Writes the selection directly to the Claude Code temp file passed as $1,
+# falling back to stdout if called without an argument.
+exec cc-hist --output "${1:-/dev/stdout}"
+```
+
+```bash
+chmod +x ~/.local/bin/cc-hist-paste
+```
+
+**Step 3 — map it to a key in `~/.claude/keybindings.json`**
+
+```json
+{
+  "$schema": "https://www.schemastore.org/claude-code-keybindings.json",
+  "bindings": [
+    {
+      "context": "Chat",
+      "bindings": {
+        "ctrl+t": "chat:externalEditor"
+      }
+    }
+  ]
+}
+```
+
+Then set `EDITOR=cc-hist-paste` only for the `ctrl+t` binding by pointing it at your wrapper, while keeping `EDITOR=nvim` as the default. Claude Code will call whichever binary is in `EDITOR` when `chat:externalEditor` fires — so having two bindings call the same action means you need two separate editor env vars, or a single smart wrapper:
+
+```bash
+#!/usr/bin/env bash
+# ~/.local/bin/smart-editor
+# If called with a file that already has content → open in nvim
+# If the file is empty (Claude Code draft temp file) → open cc-hist
+TMPFILE="${1:-}"
+if [[ -n "$TMPFILE" && ! -s "$TMPFILE" ]]; then
+    exec cc-hist --output "$TMPFILE"
+else
+    exec "${EDITOR_FALLBACK:-nvim}" "$TMPFILE"
+fi
+```
+
+Set `EDITOR=smart-editor` in `~/.claude/settings.json` — empty temp files go to history search, non-empty files open in nvim.
+
 ## Uninstall
 
 ```bash
