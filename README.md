@@ -3,8 +3,6 @@
 Fuzzy search your [Claude Code](https://claude.ai/code) chat history using [fzf](https://github.com/junegunn/fzf).  
 Opens as a **popup window** (tmux/Zellij) or an inline panel, and integrates directly with Claude Code via a keyboard shortcut.
 
-![demo placeholder](https://via.placeholder.com/800x400?text=cc-hist+demo)
-
 ## Features
 
 - **Fuzzy search** across all Claude Code chat history entries
@@ -63,6 +61,11 @@ cc-hist -o /tmp/draft.txt
 
 # Pre-fill the search query
 cc-hist -q "deploy"
+
+# Pipe the result to the clipboard
+cc-hist | pbcopy          # macOS
+cc-hist | xclip -sel clip # Linux (X11)
+cc-hist | wl-copy         # Linux (Wayland)
 ```
 
 ## How the popup works
@@ -125,92 +128,30 @@ You can bind `cc-hist` to a tmux key so it opens as a popup from any terminal wi
 Add to `~/.tmux.conf`:
 
 ```tmux
-# Ctrl+H opens Claude Code history search as a tmux popup
-bind-key -n C-h display-popup -E -w 80% -h 60% "cc-hist -o /tmp/cc-hist-tmux.txt && cat /tmp/cc-hist-tmux.txt | pbcopy"
+# Paste selected history into the active pane
+bind-key -n C-h run-shell "cc-hist -o /tmp/cc-hist-tmux.txt && tmux load-buffer /tmp/cc-hist-tmux.txt && tmux paste-buffer"
 ```
 
-Or, if you want the selection pasted directly into the active pane:
+Or copy to clipboard instead of pasting:
 
 ```tmux
-bind-key -n C-h run-shell "cc-hist -o /tmp/cc-hist-tmux.txt && tmux load-buffer /tmp/cc-hist-tmux.txt && tmux paste-buffer"
+# macOS
+bind-key -n C-h display-popup -E -w 80% -h 60% "cc-hist | pbcopy"
+# Linux (X11)
+bind-key -n C-h display-popup -E -w 80% -h 60% "cc-hist | xclip -sel clip"
 ```
 
 Reload your config with `tmux source ~/.tmux.conf`.
 
-### Standalone terminal usage
+### Using cc-hist alongside your existing `$EDITOR`
 
-`cc-hist` works as a plain CLI tool — no Claude Code required.
+By default `install.sh` sets `EDITOR=cc-hist-edit` in Claude Code's `settings.json`, routing every `chat:externalEditor` invocation to history search. If you want to keep a real editor (e.g. `nvim`) for editing non-empty drafts and only open history search for empty ones, use a **smart wrapper**:
 
-```bash
-# Interactive search, print selected message to stdout
-cc-hist
-
-# Write selected message to a file
-cc-hist -o /tmp/draft.txt
-
-# Pre-fill the search query
-cc-hist -q "deploy"
-
-# Pipe the result into another command
-cc-hist | pbcopy          # macOS — copy to clipboard
-cc-hist | xclip -sel clip # Linux — copy to clipboard
-cc-hist | wl-copy         # Wayland — copy to clipboard
-```
-
-### Using cc-hist without replacing your `$EDITOR`
-
-By default `install.sh` sets `EDITOR=cc-hist-edit` globally in Claude Code's `settings.json`, which means every `chat:externalEditor` action opens history search. If you want to keep your editor (e.g. `nvim`) and trigger history search via a **separate key binding**, do this instead:
-
-**Step 1 — restore your original editor**
-
-In `~/.claude/settings.json`, set `EDITOR` back to your editor and remove `cc-hist-edit`:
-
-```json
-{
-  "env": {
-    "EDITOR": "nvim"
-  }
-}
-```
-
-**Step 2 — add a dedicated history key binding**
-
-Create a small wrapper script, e.g. `~/.local/bin/cc-hist-paste`:
+**Step 1 — create `~/.local/bin/smart-editor`**
 
 ```bash
 #!/usr/bin/env bash
-# Writes the selection directly to the Claude Code temp file passed as $1,
-# falling back to stdout if called without an argument.
-exec cc-hist --output "${1:-/dev/stdout}"
-```
-
-```bash
-chmod +x ~/.local/bin/cc-hist-paste
-```
-
-**Step 3 — map it to a key in `~/.claude/keybindings.json`**
-
-```json
-{
-  "$schema": "https://www.schemastore.org/claude-code-keybindings.json",
-  "bindings": [
-    {
-      "context": "Chat",
-      "bindings": {
-        "ctrl+t": "chat:externalEditor"
-      }
-    }
-  ]
-}
-```
-
-Then set `EDITOR=cc-hist-paste` only for the `ctrl+t` binding by pointing it at your wrapper, while keeping `EDITOR=nvim` as the default. Claude Code will call whichever binary is in `EDITOR` when `chat:externalEditor` fires — so having two bindings call the same action means you need two separate editor env vars, or a single smart wrapper:
-
-```bash
-#!/usr/bin/env bash
-# ~/.local/bin/smart-editor
-# If called with a file that already has content → open in nvim
-# If the file is empty (Claude Code draft temp file) → open cc-hist
+# Empty file → history search; non-empty file → open in $EDITOR_FALLBACK
 TMPFILE="${1:-}"
 if [[ -n "$TMPFILE" && ! -s "$TMPFILE" ]]; then
     exec cc-hist --output "$TMPFILE"
@@ -219,7 +160,22 @@ else
 fi
 ```
 
-Set `EDITOR=smart-editor` in `~/.claude/settings.json` — empty temp files go to history search, non-empty files open in nvim.
+```bash
+chmod +x ~/.local/bin/smart-editor
+```
+
+**Step 2 — update `~/.claude/settings.json`**
+
+```json
+{
+  "env": {
+    "EDITOR": "smart-editor",
+    "EDITOR_FALLBACK": "nvim"
+  }
+}
+```
+
+Now `Ctrl+T` on an empty draft opens history search; invoking `chat:externalEditor` on an existing draft opens nvim.
 
 ## Uninstall
 
@@ -235,4 +191,4 @@ cc-hist reads `~/.claude/history.jsonl` — the same file Claude Code uses to po
 
 ## License
 
-[BSD 2-Clause](LICENSE) © 2025 liks79
+[BSD 2-Clause](LICENSE) © 2025–2026 liks79
