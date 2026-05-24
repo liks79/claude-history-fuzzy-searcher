@@ -129,17 +129,21 @@ Add to `~/.tmux.conf`:
 
 ```tmux
 # Paste selected history into the active pane
-bind-key -n C-h run-shell "cc-hist -o /tmp/cc-hist-tmux.txt && tmux load-buffer /tmp/cc-hist-tmux.txt && tmux paste-buffer"
+bind C-y \
+  display-popup -b rounded -E -w 85% -h 75% "TMUX='' cc-hist -o /tmp/cc-hist-out.txt" \; \
+  run-shell "[ -s /tmp/cc-hist-out.txt ] && tmux load-buffer /tmp/cc-hist-out.txt && tmux paste-buffer -p; rm -f /tmp/cc-hist-out.txt"
 ```
 
 Or copy to clipboard instead of pasting:
 
 ```tmux
 # macOS
-bind-key -n C-h display-popup -E -w 80% -h 60% "cc-hist | pbcopy"
+bind C-y display-popup -b rounded -E -w 85% -h 75% "TMUX='' cc-hist | pbcopy"
 # Linux (X11)
-bind-key -n C-h display-popup -E -w 80% -h 60% "cc-hist | xclip -sel clip"
+bind C-y display-popup -b rounded -E -w 85% -h 75% "TMUX='' cc-hist | xclip -sel clip"
 ```
+
+> **`TMUX=''` is required.** Inside `display-popup`, the `$TMUX` variable is still set, which causes `cc-hist` to invoke `fzf --tmux` — a nested popup that tmux does not support. Clearing `TMUX` forces fzf into inline mode within the popup.
 
 Reload your config with `tmux source ~/.tmux.conf`.
 
